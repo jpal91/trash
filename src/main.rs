@@ -131,7 +131,7 @@ impl Default for Trash {
         let reader = BufReader::new(file);
 
         let hist: History = serde_json::from_reader(reader).unwrap();
-
+        
         Self {
             hist_path,
             hist,
@@ -222,33 +222,99 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::create_dir;
 
-    fn resolve_paths_debug() -> (PathBuf, PathBuf) {
-        let trash_dir = PathBuf::from_iter([
-            dirs::home_dir().unwrap(),
-            PathBuf::from("dev/trash/dev-trash/")
-        ]);
+    fn trash_dir() -> (tempfile::TempDir, PathBuf) {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let mut tmp_path = tmp_dir.path().to_owned();
 
-        let mut hist_path = trash_dir.clone();
-        hist_path.push("trash-history.json");
+        tmp_path.push("trash-history.json");
 
-        (hist_path, trash_dir)
+        let hist_path = tmp_path.clone();
+
+        let mut cfg = File::create(&tmp_path).unwrap();
+        cfg.write_all(b"[]").unwrap();
+        tmp_path.pop();
+
+        tmp_path.push("test_dir");
+        create_dir(&tmp_path).unwrap();
+
+        for i in 0..3 {
+            tmp_path.push(format!("test{}.txt", i));
+            File::create(&tmp_path).unwrap();
+            tmp_path.pop();
+        }
+
+        tmp_path.pop();
+        tmp_path.push("trash_dir");
+        create_dir(&tmp_path).unwrap();
+    
+
+        (tmp_dir, hist_path)
+    }
+
+    #[test]
+    fn test_trash() {
+    
+        let (tmp_dir, hist_path) = trash_dir();
+        let mut trash_dir = tmp_dir.path().to_owned();
+        let mut test_dir = tmp_dir.path().to_owned();
+
+        trash_dir.push("trash_dir");
+        test_dir.push("test_dir");
+
+        env::set_current_dir(&test_dir).unwrap();
+
+        let files: Vec<String> = test_dir
+            .read_dir()
+            .unwrap()
+            .map(|f|{
+                f.unwrap()
+                    .file_name()
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+
+        let mut trash = Trash::new(hist_path.to_owned(), trash_dir.to_owned());
+
+        trash.remove(files.clone());
+
+        for file in files {
+            test_dir.push(file);
+            assert!(!test_dir.exists());
+            test_dir.pop();
+        }
+    }
+
+    #[test]
+    fn test_glob() {
+        let (tmp_dir, hist_path) = trash_dir();
+        let mut trash_dir = tmp_dir.path().to_owned();
+        let mut test_dir = tmp_dir.path().to_owned();
+
+        trash_dir.push("trash_dir");
+
+        env::set_current_dir(&test_dir).unwrap();
+
+        let mut trash = Trash::new(hist_path.to_owned(), trash_dir.to_owned());
+
+        trash.remove(vec![String::from("test_dir/*")]);
+
+        test_dir.push("test_dir");
+
+        for i in 0..3 {
+            test_dir.push(format!("test{}.txt", i));
+            assert!(!test_dir.exists());
+            test_dir.pop();
+        }
     }
 
     #[test]
     fn test_trash_explain() {
-        let (hist_path, trash_dir) = resolve_paths_debug();
-
-        Builder::new()
-            .format(|buf, record| {
-                writeln!(
-                    buf,
-                    "{}",
-                    record.args()
-                )
-            })
-            .filter_level(LevelFilter::Debug)
-            .init();
+        let (tmp_dir, hist_path) = trash_dir();
+        let trash_dir = tmp_dir.path().to_owned();
 
         let mut trash = Trash::new(hist_path.clone(), trash_dir.clone());
         trash.toggle_explain();
