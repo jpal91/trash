@@ -10,7 +10,7 @@ use serde::{Serialize, Deserialize};
 use glob::glob;
 use log::{info, error, LevelFilter};
 use env_logger::Builder;
-use colorize::colorize;
+use colorize::{colorize, print_color};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct HistoryPair(PathBuf, PathBuf);
@@ -42,8 +42,12 @@ struct Args {
     #[arg(long, short)]
     explain: bool,
 
+    /// View history
+    #[arg(long, short='w')]
+    view: bool,
+
     /// Name of file or directory to remove
-    #[arg(required_unless_present = "undo")]
+    #[arg(required_unless_present_any(["undo", "view"]))]
     name: Option<Vec<String>>
 }
 
@@ -81,6 +85,7 @@ impl std::fmt::Display for TrashError {
         write!(f, "{}", colorize!(Frb->"trash error:", b->self.0.as_str()))
     }
 }
+
 
 impl Trash {
     pub fn new(hist_path: PathBuf, trash_path: PathBuf) -> TrashResult<Self> {
@@ -123,13 +128,17 @@ impl Trash {
         for l in last {
             let (old, new) = (l.0, l.1);
 
-            if !self.explain {
-                move_file(&new, &old)?;
-                unresolved.push(HistoryPair(old, new));
+            info!("{}", colorize!(b->"Moving", Fgb->&new, b->"to", Fgb->&old));
+
+            if self.explain {
                 continue
             }
-
-            info!("{}", colorize!(b->"Moving", Fgb->new, b->"to", Fgb->old))
+            
+            if let Err(e) = rename(&new, &old) {
+                unresolved.push(HistoryPair(old, new));
+                error!("{}", colorize!(Frb->"trash error:", e))
+            }
+            
         };
 
         if !unresolved.is_empty() {
@@ -153,11 +162,14 @@ impl Trash {
                 };
                 let new_path = PathBuf::from_iter([trash_dir.as_os_str(), old_path.file_name().unwrap()]);
                 
-                if !self.explain && move_file(&old_path, &new_path).is_err() {
-                    continue
-                }
 
                 info!("{}", colorize!(b->"Moving", Fgb->&old_path, b->"to", Fgb->&new_path));
+
+                if self.explain {
+                    continue
+                }
+                
+                rename(&old_path, &new_path)?;
 
                 let pair = HistoryPair(old_path, new_path);
 
@@ -168,6 +180,15 @@ impl Trash {
         self.hist.push(hist_item);
 
         Ok(())
+    }
+
+    pub fn view(&self) {
+        for (i, pairs) in self.hist.iter().enumerate() {
+            print_color!(NFb->"#", Fbb->i);
+            for pair in pairs.iter() {
+                print_color!(Fgb->"Moved", b->&pair.0, Fgb->"to", b->&pair.1)
+            }
+        }
     }
 
     pub fn write(&self) -> TrashResult<()> {
@@ -214,13 +235,6 @@ pub fn resolve_paths() -> TrashResult<(PathBuf, PathBuf)> {
     Ok((hist_path, trash_dir))
 }
 
-pub fn move_file(src: &PathBuf, dst: &PathBuf) -> TrashResult<()> {
-    if let Err(e) =  rename(src, dst) {
-        Err(TrashError(colorize!(Frb->"trash error:", "Unable to move", b->src, e)))
-    } else {
-        Ok(())
-    }
-}
 
 fn main() -> ExitCode {
     let args = Args::parse();
@@ -248,6 +262,11 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE
         }
     };
+
+    if args.view {
+        trash.view();
+        return ExitCode::SUCCESS
+    }
 
     if args.explain {
         info!("{}", colorize!(Fyb->"Explain mode - No actions will be taken"));
