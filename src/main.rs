@@ -214,7 +214,9 @@ fn main() {
         trash.remove(args.name.unwrap())
     }
 
-    trash.write();
+    if !args.explain {
+        trash.write();
+    }
 }
 
 #[cfg(test)]
