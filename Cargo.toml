@@ -17,3 +17,6 @@ colorize = { path = "colorize" }
 
 [dev-dependencies]
 tempfile = "3.10.0"
+
+[profile.release]
+strip = true
