@@ -184,7 +184,7 @@ impl Trash {
 
     pub fn view(&self) {
         for (i, pairs) in self.hist.iter().enumerate() {
-            print_color!(NFb->"#", Fbb->i);
+            print_color!(NFb->"#", Fbb->i + 1);
             for pair in pairs.iter() {
                 print_color!(Fgb->"Moved", b->&pair.0, Fgb->"to", b->&pair.1)
             }
