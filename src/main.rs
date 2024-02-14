@@ -169,6 +169,7 @@ impl Trash {
                     continue
                 }
                 
+                // Todo: Better error handling when move doesn't work
                 rename(&old_path, &new_path)?;
 
                 let pair = HistoryPair(old_path, new_path);
