@@ -3,6 +3,7 @@ use std::{env, fs};
 use std::fs::{File, rename};
 use std::path::PathBuf;
 use std::io::{BufReader, Write};
+use std::process::ExitCode;
 
 use clap::Parser;
 use serde::{Serialize, Deserialize};
@@ -11,12 +12,13 @@ use log::{info, error, LevelFilter};
 use env_logger::Builder;
 use colorize::colorize;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct HistoryPair(PathBuf, PathBuf);
 
 type HistoryPairs = Vec<HistoryPair>;
 type History = Vec<HistoryPairs>;
 
+#[derive(Debug)]
 pub struct Trash {
     hist: History,
     hist_path: PathBuf,
@@ -45,25 +47,75 @@ struct Args {
     name: Option<Vec<String>>
 }
 
+#[derive(Debug)]
+pub struct TrashError(String);
+type TrashResult<T> = Result<T, TrashError>;
+
+impl TrashError {
+    fn new(err: &str) -> Self {
+        Self(err.to_string())
+    } 
+}
+
+impl From<std::io::Error> for TrashError {
+    fn from(value: std::io::Error) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl From<&str> for TrashError {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl From<serde_json::Error> for TrashError {
+    fn from(value: serde_json::Error) -> Self {
+        Self(value.to_string())
+    }
+}
+
+
+impl std::fmt::Display for TrashError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", colorize!(Frb->"trash error:", b->self.0.as_str()))
+    }
+}
+
 impl Trash {
-    pub fn new(hist_path: PathBuf, trash_path: PathBuf) -> Self {
-        let file = File::open(&hist_path).unwrap();
+    pub fn new(hist_path: PathBuf, trash_path: PathBuf) -> TrashResult<Self> {
+        let file = File::open(&hist_path)?;
         let reader = BufReader::new(file);
 
-        let hist: History = serde_json::from_reader(reader).unwrap();
+        let hist: History = serde_json::from_reader(reader)?;
 
-        Self {
+        Ok(Self {
             hist_path,
             hist,
             trash_path,
             explain: false
-        }
+        })
     }
 
-    pub fn undo(&mut self) {
+    pub fn default() -> TrashResult<Self> {
+        let (hist_path, trash_path) = resolve_paths()?;
+        let file = File::open(&hist_path)?;
+        let reader = BufReader::new(file);
+
+        let hist: History = serde_json::from_reader(reader)?;
+        
+        Ok(Self {
+            hist_path,
+            hist,
+            trash_path,
+            explain: false
+        })
+    }
+
+    pub fn undo(&mut self) -> TrashResult<()> {
         let last = match self.hist.pop() {
             Some(l) => l,
-            None => return error!("{}", colorize!(Frb->"trash error:", b->"No history found!"))
+            None => return Err(TrashError::new("No history found!"))
         };
 
         let mut unresolved: Vec<HistoryPair> = Vec::with_capacity(last.len());
@@ -71,7 +123,8 @@ impl Trash {
         for l in last {
             let (old, new) = (l.0, l.1);
 
-            if !self.explain && move_file(&new, &old).is_err() {
+            if !self.explain {
+                move_file(&new, &old)?;
                 unresolved.push(HistoryPair(old, new));
                 continue
             }
@@ -82,9 +135,11 @@ impl Trash {
         if !unresolved.is_empty() {
             self.hist.push(unresolved)
         }
+
+        Ok(())
     }
 
-    pub fn remove(&mut self, target: Vec<String>) {
+    pub fn remove(&mut self, target: Vec<String>) -> TrashResult<()> {
         let mut hist_item: HistoryPairs = vec![];
         let trash_dir = &self.trash_path;
 
@@ -93,7 +148,7 @@ impl Trash {
             for e in glob(&t).expect("Failed to read glob") {
                 let old_path = match e {
                     Ok(ent) if ent == self.hist_path => continue,
-                    Ok(ent) => ent.canonicalize().unwrap(),
+                    Ok(ent) => ent.canonicalize()?,
                     _ => continue
                 };
                 let new_path = PathBuf::from_iter([trash_dir.as_os_str(), old_path.file_name().unwrap()]);
@@ -110,13 +165,16 @@ impl Trash {
             }
         }
 
-        self.hist.push(hist_item)
+        self.hist.push(hist_item);
+
+        Ok(())
     }
 
-    pub fn write(&self) {
-        let file = File::create(&self.hist_path).unwrap();
+    pub fn write(&self) -> TrashResult<()> {
+        let file = File::create(&self.hist_path)?;
 
-        serde_json::to_writer_pretty(file, &self.hist).unwrap();
+        serde_json::to_writer_pretty(file, &self.hist)?;
+        Ok(())
     }
 
     pub fn toggle_explain(&mut self) {
@@ -124,37 +182,21 @@ impl Trash {
     }
 }
 
-impl Default for Trash {
-    fn default() -> Self {
-        let (hist_path, trash_path) = resolve_paths();
-        let file = File::open(&hist_path).unwrap();
-        let reader = BufReader::new(file);
 
-        let hist: History = serde_json::from_reader(reader).unwrap();
-        
-        Self {
-            hist_path,
-            hist,
-            trash_path,
-            explain: false
-        }
-    }
-}
-
-pub fn resolve_paths() -> (PathBuf, PathBuf) {
+pub fn resolve_paths() -> TrashResult<(PathBuf, PathBuf)> {
     let mut hist_path = PathBuf::from_iter([
         dirs::home_dir().unwrap(),
         PathBuf::from(".config/trash/")
     ]);
 
     if !hist_path.try_exists().unwrap() {
-        fs::create_dir_all(&hist_path).unwrap();
+        fs::create_dir_all(&hist_path)?;
     }
 
     hist_path.push("trash-history.json");
 
     if !hist_path.try_exists().unwrap() {
-        let mut file = File::create(&hist_path).unwrap();
+        let mut file = File::create(&hist_path)?;
         file.write_all(b"[]").unwrap();
     }
 
@@ -163,26 +205,24 @@ pub fn resolve_paths() -> (PathBuf, PathBuf) {
 
     // Most likely meaning the computer has restart and /tmp has been cleared
     // New cfg is necessary along with the creation of the directory
-    if !trash_dir.try_exists().unwrap() {
-        fs::create_dir(&trash_dir).unwrap();
-        let mut file = File::create(&hist_path).unwrap();
-        file.write_all(b"[]").unwrap();
+    if !trash_dir.try_exists()? {
+        fs::create_dir(&trash_dir)?;
+        let mut file = File::create(&hist_path)?;
+        file.write_all(b"[]")?;
     }
 
-    (hist_path, trash_dir)
+    Ok((hist_path, trash_dir))
 }
 
-#[allow(clippy::result_unit_err)]
-pub fn move_file(src: &PathBuf, dst: &PathBuf) -> Result<(), ()> {
+pub fn move_file(src: &PathBuf, dst: &PathBuf) -> TrashResult<()> {
     if let Err(e) =  rename(src, dst) {
-        error!("{}", colorize!(Frb->"trash error:", "Unable to move", b->src, e));
-        Err(())
+        Err(TrashError(colorize!(Frb->"trash error:", "Unable to move", b->src, e)))
     } else {
         Ok(())
     }
 }
 
-fn main() {
+fn main() -> ExitCode {
     let args = Args::parse();
 
     let mut logger = Builder::new();
@@ -201,7 +241,13 @@ fn main() {
 
     logger.init();
 
-    let mut trash = Trash::default();
+    let mut trash = match Trash::default() {
+        Ok(t) => t,
+        Err(e) => {
+            error!("{}", e);
+            return ExitCode::FAILURE
+        }
+    };
 
     if args.explain {
         info!("{}", colorize!(Fyb->"Explain mode - No actions will be taken"));
@@ -209,14 +255,25 @@ fn main() {
     }
 
     if args.undo {
-        trash.undo();
+        if let Err(e) = trash.undo() {
+            error!("{}", e);
+            return ExitCode::FAILURE
+        }
     } else {
-        trash.remove(args.name.unwrap())
+        if let Err(e) = trash.remove(args.name.unwrap()) {
+            error!("{}", e);
+            return ExitCode::FAILURE
+        }
     }
 
     if !args.explain {
-        trash.write();
+        if let Err(e) = trash.write() {
+            error!("{}", e);
+            return ExitCode::FAILURE
+        }
     }
+
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]
@@ -277,9 +334,9 @@ mod tests {
             })
             .collect();
 
-        let mut trash = Trash::new(hist_path.to_owned(), trash_dir.to_owned());
+        let mut trash = Trash::new(hist_path.to_owned(), trash_dir.to_owned()).unwrap();
 
-        trash.remove(files.clone());
+        trash.remove(files.clone()).unwrap();
 
         for file in files {
             test_dir.push(file);
@@ -298,9 +355,9 @@ mod tests {
 
         env::set_current_dir(&test_dir).unwrap();
 
-        let mut trash = Trash::new(hist_path.to_owned(), trash_dir.to_owned());
+        let mut trash = Trash::new(hist_path.to_owned(), trash_dir.to_owned()).unwrap();
 
-        trash.remove(vec![String::from("test_dir/*")]);
+        trash.remove(vec![String::from("test_dir/*")]).unwrap();
 
         test_dir.push("test_dir");
 
@@ -316,7 +373,7 @@ mod tests {
         let (tmp_dir, hist_path) = trash_dir();
         let trash_dir = tmp_dir.path().to_owned();
 
-        let mut trash = Trash::new(hist_path.clone(), trash_dir.clone());
+        let mut trash = Trash::new(hist_path.clone(), trash_dir.clone()).unwrap();
         trash.toggle_explain();
 
         let mut target_fld = PathBuf::from_iter([
@@ -328,8 +385,32 @@ mod tests {
 
         let mv_file = vec![target_fld.to_string_lossy().to_string()];
 
-        trash.remove(mv_file);
+        trash.remove(mv_file).unwrap();
 
         assert!(target_fld.exists());
+    }
+
+    #[test]
+    fn test_undo() {
+        let (tmp_dir, hist_path) = trash_dir();
+        let mut trash_dir = tmp_dir.path().to_owned();
+        let mut test_dir = tmp_dir.path().to_owned();
+
+        trash_dir.push("trash_dir");
+        test_dir.push("test_dir");
+
+        env::set_current_dir(&test_dir).unwrap();
+
+        let mut trash = Trash::new(hist_path.clone(), trash_dir.clone()).unwrap();
+
+        test_dir.push("test1.txt");
+
+        trash.remove(vec!["test1.txt".to_string()]).unwrap();
+
+        assert!(!test_dir.exists());
+
+        trash.undo().unwrap();
+
+        assert!(test_dir.exists())
     }
 }
