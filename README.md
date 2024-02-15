@@ -2,6 +2,8 @@
 
 A friendlier implementation of the `rm` command. 
 
+![](assets/trash.png)
+
 ## Purpose
 
 `rm` can be a little scary sometimes and I wanted an implementation that I didn't have to stare at for a full minute to make sure I was absolutely doing the correct thing before pressing enter. 
