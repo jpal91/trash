@@ -1,4 +1,0 @@
-[submodule "colorize"]
-	path = colorize
-	url = https://github.com/jpal91/colorize/
-	branch = main
