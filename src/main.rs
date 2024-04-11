@@ -160,13 +160,18 @@ impl Trash {
                     Ok(ent) => ent.canonicalize()?,
                     _ => continue
                 };
-                let new_path = PathBuf::from_iter([trash_dir.as_os_str(), old_path.file_name().unwrap()]);
+                let mut new_path = PathBuf::from_iter([trash_dir.as_os_str(), old_path.file_name().unwrap()]);
                 
 
                 info!("{}", colorize!(b->"Moving", Fgb->&old_path, b->"to", Fgb->&new_path));
 
                 if self.explain {
                     continue
+                }
+
+                if new_path.exists() {
+                    new_path = new_dir_name(new_path);
+                    info!("{}", colorize!(b->"Directory path already exists. Switching to", Fgb->&new_path));
                 }
                 
                 // Todo: Better error handling when move doesn't work
@@ -202,6 +207,7 @@ impl Trash {
     pub fn toggle_explain(&mut self) {
         self.explain = true;
     }
+
 }
 
 
@@ -236,6 +242,19 @@ pub fn resolve_paths() -> TrashResult<(PathBuf, PathBuf)> {
     Ok((hist_path, trash_dir))
 }
 
+fn new_dir_name(mut dir: PathBuf) -> PathBuf {
+    let mut count = 1;
+
+    loop {
+        dir.set_extension(count.to_string());
+
+        if !dir.exists() {
+            return dir
+        }
+
+        count += 1;
+    }
+}
 
 fn main() -> ExitCode {
     let args = Args::parse();
@@ -432,5 +451,41 @@ mod tests {
         trash.undo().unwrap();
 
         assert!(test_dir.exists())
+    }
+
+    #[test]
+    fn test_non_empty_directory_doesnt_fail() {
+        let (tmp_dir, hist_path) = trash_dir();
+        let mut trash_dir = tmp_dir.path().to_owned();
+        let mut test_dir = tmp_dir.path().to_owned();
+
+        trash_dir.push("trash_dir");
+        test_dir.push("test_dir");
+
+        let non_empty_dir = test_dir.clone().join("non-empty");
+        create_dir(&non_empty_dir).unwrap();
+        
+        let mut non_empty_dir2 = trash_dir.clone().join("non-empty");
+        create_dir(&non_empty_dir2).unwrap();
+        
+        let mut f1 = File::create(non_empty_dir.join("test1.txt")).unwrap();
+        f1.write_all(b"stuff").unwrap();
+
+        let mut f2 = File::create(non_empty_dir2.join("test1.txt")).unwrap();
+        f2.write_all(b"stuff").unwrap();
+
+        env::set_current_dir(&test_dir).unwrap();
+
+        let mut trash = Trash::new(hist_path.clone(), trash_dir.clone()).unwrap();
+
+        trash.remove(vec!["non-empty".to_string()]).unwrap();
+
+        assert!(!non_empty_dir.exists());
+
+        assert!(non_empty_dir2.exists());
+
+        non_empty_dir2.pop();
+
+        assert!(non_empty_dir2.join("non-empty.1").exists());
     }
 }
