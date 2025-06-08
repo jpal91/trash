@@ -92,7 +92,7 @@ impl Trash {
         })
     }
 
-    pub fn default() -> TrashResult<Self> {
+    pub fn try_new() -> TrashResult<Self> {
         let (hist_path, trash_path) = resolve_paths()?;
         let file = File::open(&hist_path)?;
         let reader = BufReader::new(file);
@@ -143,11 +143,22 @@ impl Trash {
 
         // There's no reliable way to tell between normal args and globs, so all are treated as globs
         for t in target {
-            for e in glob(&t).expect("Failed to read glob") {
+            let glob_paths = match glob(&t) {
+                Ok(paths) => paths,
+                Err(e) => {
+                    error!("Glob error - {}", e);
+                    continue;
+                }
+            };
+
+            for e in glob_paths {
                 let old_path = match e {
-                    Ok(ent) if ent == self.hist_path => continue,
+                    Ok(ent) if ent == self.hist_path || ent.starts_with(trash_dir) => continue,
                     Ok(ent) => ent.canonicalize()?,
-                    _ => continue,
+                    Err(e) => {
+                        error!("Glob error - {}", e);
+                        continue;
+                    }
                 };
 
                 move_targets(old_path, trash_dir.clone(), &mut hist_item, self.explain)?;

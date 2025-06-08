@@ -25,7 +25,7 @@ fn main() -> ExitCode {
 
     logger.init();
 
-    let mut trash = match Trash::default() {
+    let mut trash = match Trash::try_new() {
         Ok(t) => t,
         Err(e) => {
             error!("{}", e);
@@ -68,8 +68,11 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::TempDir;
+    use uuid::Uuid;
+
     use super::*;
-    use std::fs::create_dir;
+    use std::fs;
     use std::{env, fs::File, path::PathBuf};
 
     fn trash_dir() -> (tempfile::TempDir, PathBuf) {
@@ -85,7 +88,8 @@ mod tests {
         tmp_path.pop();
 
         tmp_path.push("test_dir");
-        create_dir(&tmp_path).unwrap();
+        fs::create_dir(&tmp_path).unwrap();
+        env::set_current_dir(&tmp_path).unwrap();
 
         for i in 0..3 {
             tmp_path.push(format!("test{}.txt", i));
@@ -95,31 +99,47 @@ mod tests {
 
         tmp_path.pop();
         tmp_path.push("trash_dir");
-        create_dir(&tmp_path).unwrap();
+        fs::create_dir(&tmp_path).unwrap();
 
         (tmp_dir, hist_path)
+    }
+
+    fn fill_dir(tmp_dir: &TempDir) -> PathBuf {
+        let id = Uuid::new_v4();
+        let path = tmp_dir.path().join("test_dir").join(id.to_string());
+        fs::create_dir(&path).unwrap();
+
+        for i in 0..3 {
+            fs::write(path.join(format!("test-{}.txt", i)), "").unwrap();
+        }
+
+        path
     }
 
     #[test]
     fn test_trash() {
         let (tmp_dir, hist_path) = trash_dir();
-        let mut trash_dir = tmp_dir.path().to_owned();
-        let mut test_dir = tmp_dir.path().to_owned();
+        let trash_dir = tmp_dir.path().join("trash_dir");
+        let mut test_dir = tmp_dir.path().join("test_dir");
+        let new_dir = fill_dir(&tmp_dir);
 
-        trash_dir.push("trash_dir");
-        test_dir.push("test_dir");
-
-        env::set_current_dir(&test_dir).unwrap();
-
-        let files: Vec<String> = test_dir
+        let files: Vec<String> = new_dir
             .read_dir()
             .unwrap()
-            .map(|f| f.unwrap().file_name().to_str().unwrap().to_string())
+            .map(|f| {
+                format!(
+                    "{}/{}",
+                    new_dir.to_string_lossy(),
+                    f.unwrap().file_name().to_string_lossy()
+                )
+            })
             .collect();
 
         let mut trash = Trash::new(hist_path.to_owned(), trash_dir.to_owned()).unwrap();
 
         trash.remove(files.clone()).unwrap();
+
+        test_dir.push(new_dir);
 
         for file in files {
             test_dir.push(file);
@@ -131,21 +151,17 @@ mod tests {
     #[test]
     fn test_glob() {
         let (tmp_dir, hist_path) = trash_dir();
-        let mut trash_dir = tmp_dir.path().to_owned();
-        let mut test_dir = tmp_dir.path().to_owned();
-
-        trash_dir.push("trash_dir");
-
-        env::set_current_dir(&test_dir).unwrap();
+        let trash_dir = tmp_dir.path().join("trash_dir");
+        let mut test_dir = tmp_dir.path().join("test_dir");
+        let new_dir = fill_dir(&tmp_dir);
 
         let mut trash = Trash::new(hist_path.to_owned(), trash_dir.to_owned()).unwrap();
 
-        trash.remove(vec![String::from("test_dir/*")]).unwrap();
-
-        test_dir.push("test_dir");
+        let dirname = new_dir.file_name().unwrap().to_string_lossy();
+        trash.remove(vec![format!("{}/*", dirname)]).unwrap();
 
         for i in 0..3 {
-            test_dir.push(format!("test{}.txt", i));
+            test_dir.push(format!("test-{}.txt", i));
             assert!(!test_dir.exists());
             test_dir.pop();
         }
@@ -154,17 +170,13 @@ mod tests {
     #[test]
     fn test_trash_explain() {
         let (tmp_dir, hist_path) = trash_dir();
-        let trash_dir = tmp_dir.path().to_owned();
+        let trash_dir = tmp_dir.path().join("trash_dir");
+        let new_dir = fill_dir(&tmp_dir);
 
         let mut trash = Trash::new(hist_path.clone(), trash_dir.clone()).unwrap();
         trash.toggle_explain();
 
-        let mut target_fld = PathBuf::from_iter([
-            dirs::home_dir().unwrap(),
-            PathBuf::from("dev/trash/dev-folder/"),
-        ]);
-
-        target_fld.push("two.txt");
+        let target_fld = new_dir.join(&new_dir).join("test-1.txt");
 
         let mv_file = vec![target_fld.to_string_lossy().to_string()];
 
@@ -176,19 +188,18 @@ mod tests {
     #[test]
     fn test_undo() {
         let (tmp_dir, hist_path) = trash_dir();
-        let mut trash_dir = tmp_dir.path().to_owned();
-        let mut test_dir = tmp_dir.path().to_owned();
-
-        trash_dir.push("trash_dir");
-        test_dir.push("test_dir");
-
-        env::set_current_dir(&test_dir).unwrap();
+        let trash_dir = tmp_dir.path().join("trash_dir");
+        let mut test_dir = tmp_dir.path().join("test_dir");
+        let new_dir = fill_dir(&tmp_dir);
 
         let mut trash = Trash::new(hist_path.clone(), trash_dir.clone()).unwrap();
 
-        test_dir.push("test1.txt");
+        test_dir.push(&new_dir);
+        test_dir.push("test-1.txt");
 
-        trash.remove(vec!["test1.txt".to_string()]).unwrap();
+        trash
+            .remove(vec![format!("{}/test-1.txt", new_dir.to_string_lossy())])
+            .unwrap();
 
         assert!(!test_dir.exists());
 
@@ -200,29 +211,23 @@ mod tests {
     #[test]
     fn test_non_empty_directory_doesnt_fail() {
         let (tmp_dir, hist_path) = trash_dir();
-        let mut trash_dir = tmp_dir.path().to_owned();
-        let mut test_dir = tmp_dir.path().to_owned();
+        let trash_dir = tmp_dir.path().join("trash_dir");
+        let new_dir = fill_dir(&tmp_dir);
 
-        trash_dir.push("trash_dir");
-        test_dir.push("test_dir");
+        let non_empty_dir = new_dir.join("non-empty");
+        fs::create_dir(&non_empty_dir).unwrap();
 
-        let non_empty_dir = test_dir.clone().join("non-empty");
-        create_dir(&non_empty_dir).unwrap();
+        let mut non_empty_dir2 = trash_dir.join("non-empty");
+        fs::create_dir(&non_empty_dir2).unwrap();
 
-        let mut non_empty_dir2 = trash_dir.clone().join("non-empty");
-        create_dir(&non_empty_dir2).unwrap();
-
-        let mut f1 = File::create(non_empty_dir.join("test1.txt")).unwrap();
-        f1.write_all(b"stuff").unwrap();
-
-        let mut f2 = File::create(non_empty_dir2.join("test1.txt")).unwrap();
-        f2.write_all(b"stuff").unwrap();
-
-        env::set_current_dir(&test_dir).unwrap();
+        fs::write(non_empty_dir.join("test-non-empty.txt"), "").unwrap();
+        fs::write(non_empty_dir2.join("test-non-empty.txt"), "").unwrap();
 
         let mut trash = Trash::new(hist_path.clone(), trash_dir.clone()).unwrap();
 
-        trash.remove(vec!["non-empty".to_string()]).unwrap();
+        trash
+            .remove(vec![format!("{}/non-empty", new_dir.to_string_lossy())])
+            .unwrap();
 
         assert!(!non_empty_dir.exists());
 
