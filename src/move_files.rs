@@ -88,7 +88,7 @@ pub fn move_targets(
     Ok(())
 }
 
-fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> std::io::Result<()> {
+pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> std::io::Result<()> {
     assert!(from.as_ref().is_file() && !to.as_ref().exists());
 
     // Open the source file for reading

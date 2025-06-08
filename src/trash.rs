@@ -12,7 +12,7 @@ use glob::{glob, GlobError};
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 
-use super::move_files::move_targets;
+use super::move_files::{move_targets, rename};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct HistoryPair(pub PathBuf, pub PathBuf);
@@ -124,7 +124,13 @@ impl Trash {
                 continue;
             }
 
-            if let Err(e) = fs::rename(&new, &old) {
+            let parent = old.parent().unwrap();
+
+            if !parent.exists() {
+                fs::create_dir_all(parent)?;
+            }
+
+            if let Err(e) = rename(&new, &old) {
                 unresolved.push(HistoryPair(old, new));
                 error!("{}", colorize!(Frb->"trash error:", e))
             }
