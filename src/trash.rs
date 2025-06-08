@@ -1,33 +1,23 @@
-#![allow(unused)]
 use std::{
-    collections::VecDeque,
     env,
     fs::{self, File},
-    io::{BufReader, Write},
+    io::BufReader,
     path::PathBuf,
     string::ToString,
 };
 
 use clap::Parser;
 use colorize::{colorize, print_color};
-// use fs_extra::{
-//     dir::{move_dir, CopyOptions},
-//     file::{move_file, CopyOptions as FileCopyOpts},
-// };
-use fs_more::{
-    directory::{move_directory, DirectoryMoveOptions},
-    file::{move_file, FileMoveOptions},
-};
 use glob::{glob, GlobError};
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 
-use super::move_files::rename;
+use super::move_files::move_targets;
 
 #[derive(Serialize, Deserialize, Debug)]
-struct HistoryPair(PathBuf, PathBuf);
+pub struct HistoryPair(pub PathBuf, pub PathBuf);
 
-type HistoryPairs = Vec<HistoryPair>;
+pub type HistoryPairs = Vec<HistoryPair>;
 type History = Vec<HistoryPairs>;
 
 #[derive(Debug)]
@@ -62,9 +52,6 @@ pub struct Args {
     pub name: Option<Vec<String>>,
 }
 
-// #[derive(Debug)]
-// pub struct TrashError(String);
-
 #[derive(thiserror::Error, Debug)]
 pub enum TrashError {
     #[error("{}", self.fmt_err())]
@@ -75,15 +62,9 @@ pub enum TrashError {
     Serde(#[from] serde_json::error::Error),
     #[error("{}", self.fmt_err())]
     Glob(#[from] GlobError),
-    #[error("{}", self.fmt_err())]
-    FSExtra(#[from] fs_extra::error::Error),
-    #[error("{}", self.fmt_err())]
-    FSMore(#[from] fs_more::error::FileError),
-    #[error("{}", self.fmt_err())]
-    FSMoreDir(#[from] fs_more::error::MoveDirectoryError),
 }
 
-type TrashResult<T> = Result<T, TrashError>;
+pub type TrashResult<T> = Result<T, TrashError>;
 
 impl TrashError {
     fn new(err: &str) -> Self {
@@ -221,96 +202,4 @@ fn resolve_paths() -> TrashResult<(PathBuf, PathBuf)> {
     }
 
     Ok((hist_path, trash_dir))
-}
-
-fn new_item_name(item: &mut PathBuf) {
-    let mut count = 1;
-
-    loop {
-        item.set_extension(count.to_string());
-
-        if !item.exists() {
-            break;
-        }
-
-        count += 1;
-    }
-}
-
-fn move_targets(
-    path: PathBuf,
-    base_dir: PathBuf,
-    hist_items: &mut HistoryPairs,
-    skip_move: bool,
-) -> TrashResult<()> {
-    debug!("Moving target(s) {:?} - Base Dir: {:?}", &path, &base_dir);
-
-    let mut queue: VecDeque<(PathBuf, PathBuf)> = VecDeque::new();
-    queue.push_back((path, base_dir));
-
-    let mut delete_dirs: Vec<PathBuf> = vec![];
-
-    while let Some((item, base)) = queue.pop_front() {
-        debug!(
-            "Item - {:?}, Base - {:?}, IsDir - {}",
-            &item,
-            &base,
-            item.is_dir()
-        );
-        let mut new_path = base.join(item.file_name().unwrap());
-
-        if item.is_dir() {
-            if new_path.exists() {
-                new_item_name(&mut new_path);
-                info!(
-                    "{}",
-                    colorize!(b->"Directory path already exists. Switching to", Fgb->&new_path)
-                );
-            } else {
-                debug!("Creating new dir {:?}", &new_path);
-            }
-
-            if !skip_move {
-                fs::create_dir_all(&new_path)?;
-            }
-
-            let dir_items = fs::read_dir(&item)?
-                .filter_map(|ditem| ditem.ok().map(|d| (d.path(), new_path.clone())));
-            queue.extend(dir_items);
-
-            delete_dirs.push(item);
-        } else if item.is_file() {
-            info!(
-                "{}",
-                colorize!(b->"Moving", Fgb->&item, b->"to", Fgb->&new_path)
-            );
-
-            if new_path.exists() {
-                new_item_name(&mut new_path);
-                info!(
-                    "{}",
-                    colorize!(b->"File path already exists. Switching to", Fgb->&new_path)
-                );
-            }
-
-            if skip_move {
-                continue;
-            }
-
-            rename(&item, &new_path)?;
-
-            let pair = HistoryPair(item, new_path);
-            hist_items.push(pair);
-        } else {
-            warn!("Path {:?} is not a file or a directory. Skipping...", &item);
-        }
-    }
-
-    for dir in delete_dirs {
-        if !dir.exists() {
-            continue;
-        }
-        _ = fs::remove_dir_all(&dir);
-    }
-    Ok(())
 }
