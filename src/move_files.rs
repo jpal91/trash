@@ -37,7 +37,7 @@ pub fn move_targets(
                 new_item_name(&mut new_path);
                 info!(
                     "{}",
-                    colorize!(b->"Directory path already exists. Switching to", Fgb->&new_path)
+                    colorize!("{} {:?}", b->"Directory path already exists. Switching to", Fgb->&new_path)
                 );
             } else {
                 debug!("Creating new dir {:?}", &new_path);
@@ -55,14 +55,14 @@ pub fn move_targets(
         } else if item.is_file() {
             info!(
                 "{}",
-                colorize!(b->"Moving", Fgb->&item, b->"to", Fgb->&new_path)
+                colorize!("{} {:?} {} {:?}", b->"Moving", Fgb->&item, b->"to", Fgb->&new_path)
             );
 
             if new_path.exists() {
                 new_item_name(&mut new_path);
                 info!(
                     "{}",
-                    colorize!(b->"File path already exists. Switching to", Fgb->&new_path)
+                    colorize!("{} {:?}",b->"File path already exists. Switching to", Fgb->&new_path)
                 );
             }
 

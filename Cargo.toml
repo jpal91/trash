@@ -1,13 +1,13 @@
 [package]
 name = "trash"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 clap = { version = "4.5.0", features = ["derive"] }
-colorize-macros = "0.6.3"
+colorize-macros = "0.8.0"
 dirs = "5.0.1"
 env_logger = "0.11.2"
 glob = "0.3.1"

@@ -1,8 +1,8 @@
 use std::{
     env,
-    fs::{self, File},
+    fs::{self, remove_dir, File},
     io::BufReader,
-    path::PathBuf,
+    path::{Path, PathBuf},
     string::ToString,
 };
 
@@ -54,13 +54,13 @@ pub struct Args {
 
 #[derive(thiserror::Error, Debug)]
 pub enum TrashError {
-    #[error("{}", self.fmt_err())]
+    #[error("{0}")]
     General(String),
-    #[error("{}", self.fmt_err())]
+    #[error("{0}")]
     Io(#[from] std::io::Error),
-    #[error("{}", self.fmt_err())]
+    #[error("{0}")]
     Serde(#[from] serde_json::error::Error),
-    #[error("{}", self.fmt_err())]
+    #[error("{0}")]
     Glob(#[from] GlobError),
 }
 
@@ -71,8 +71,8 @@ impl TrashError {
         Self::General(err.to_string())
     }
 
-    fn fmt_err(&self) -> String {
-        colorize!(Frb->"trash error:", b->self.to_string())
+    pub fn fmt_err(&self) -> String {
+        colorize!("{} {}", Frb->"trash error:", b->self.to_string())
     }
 }
 
@@ -110,7 +110,9 @@ impl Trash {
     pub fn undo(&mut self) -> TrashResult<()> {
         let last = match self.hist.pop() {
             Some(l) => l,
-            None => return Err(TrashError::new("No history found!")),
+            None => {
+                return Err(TrashError::new("No history found!"));
+            }
         };
 
         let mut unresolved: Vec<HistoryPair> = Vec::with_capacity(last.len());
@@ -118,7 +120,10 @@ impl Trash {
         for l in last {
             let (old, new) = (l.0, l.1);
 
-            info!("{}", colorize!(b->"Moving", Fgb->&new, b->"to", Fgb->&old));
+            info!(
+                "{}",
+                colorize!("{} {:?} {} {:?}", b->"Moving", Fgb->&new, b->"to", Fgb->&old)
+            );
 
             if self.explain {
                 continue;
@@ -132,13 +137,15 @@ impl Trash {
 
             if let Err(e) = rename(&new, &old) {
                 unresolved.push(HistoryPair(old, new));
-                error!("{}", colorize!(Frb->"trash error:", e))
+                error!("{}", colorize!("{} {}", Frb->"trash error:", e))
             }
         }
 
         if !unresolved.is_empty() {
             self.hist.push(unresolved)
         }
+
+        clean_trash_dir(&self.trash_path);
 
         Ok(())
     }
@@ -178,9 +185,9 @@ impl Trash {
 
     pub fn view(&self) {
         for (i, pairs) in self.hist.iter().enumerate() {
-            print_color!(NFb->"#", Fbb->i + 1);
+            print_color!("{} {}", NFb->"#", Fbb->i + 1);
             for pair in pairs.iter() {
-                print_color!(Fgb->"Moved", b->&pair.0, Fgb->"to", b->&pair.1)
+                print_color!("{} {:?} {} {:?}", Fgb->"Moved", b->&pair.0, Fgb->"to", b->&pair.1)
             }
         }
     }
@@ -219,4 +226,24 @@ fn resolve_paths() -> TrashResult<(PathBuf, PathBuf)> {
     }
 
     Ok((hist_path, trash_dir))
+}
+
+fn clean_trash_dir(dir: &Path) {
+    let read_dir = fs::read_dir(dir);
+
+    if read_dir.is_err() {
+        return;
+    }
+
+    read_dir
+        .unwrap()
+        .filter_map(|ent| ent.ok())
+        .for_each(|ent| {
+            let ent_path = ent.path();
+            println!("{:?}", ent_path);
+
+            if ent_path.is_dir() && remove_dir(&ent_path).is_err() {
+                clean_trash_dir(&ent_path);
+            }
+        });
 }

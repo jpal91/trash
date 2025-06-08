@@ -28,7 +28,7 @@ fn main() -> ExitCode {
     let mut trash = match Trash::try_new() {
         Ok(t) => t,
         Err(e) => {
-            error!("{}", e);
+            error!("{}", e.fmt_err());
             return ExitCode::FAILURE;
         }
     };
@@ -41,24 +41,24 @@ fn main() -> ExitCode {
     if args.explain {
         info!(
             "{}",
-            colorize!(Fyb->"Explain mode - No actions will be taken")
+            colorize!("{}", Fyb->"Explain mode - No actions will be taken")
         );
         trash.toggle_explain();
     }
 
     if args.undo {
         if let Err(e) = trash.undo() {
-            error!("{}", e);
+            error!("{}", e.fmt_err());
             return ExitCode::FAILURE;
         }
     } else if let Err(e) = trash.remove(args.name.unwrap()) {
-        error!("{}", e);
+        error!("{}", e.fmt_err());
         return ExitCode::FAILURE;
     }
 
     if !args.explain {
         if let Err(e) = trash.write() {
-            error!("{}", e);
+            error!("{}", e.fmt_err());
             return ExitCode::FAILURE;
         }
     }
