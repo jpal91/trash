@@ -6,6 +6,7 @@ use clap::Parser;
 use colorize::colorize;
 use env_logger::Builder;
 use log::{error, info, LevelFilter};
+use stacker;
 
 use trash::{Args, Trash};
 
@@ -16,9 +17,11 @@ fn main() -> ExitCode {
 
     logger.format(|buf, record| writeln!(buf, "{}", record.args()));
 
-    if args.verbose || args.explain {
+    if args.verbose {
         logger.filter_level(LevelFilter::Debug);
-    };
+    } else if args.explain {
+        logger.filter_level(LevelFilter::Info);
+    }
 
     logger.init();
 
@@ -43,13 +46,22 @@ fn main() -> ExitCode {
         trash.toggle_explain();
     }
 
-    if args.undo {
-        if let Err(e) = trash.undo() {
+    let res = stacker::maybe_grow(32 * 1024, 50 * 1024 * 1024, || {
+        if args.undo {
+            if let Err(e) = trash.undo() {
+                error!("{}", e);
+                return Err(e);
+            }
+        } else if let Err(e) = trash.remove(args.name.unwrap()) {
             error!("{}", e);
-            return ExitCode::FAILURE;
+            // return ExitCode::FAILURE;
+            return Err(e);
         }
-    } else if let Err(e) = trash.remove(args.name.unwrap()) {
-        error!("{}", e);
+
+        Ok(())
+    });
+
+    if res.is_err() {
         return ExitCode::FAILURE;
     }
 
