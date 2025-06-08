@@ -8,9 +8,12 @@ use std::{
 
 use clap::Parser;
 use colorize::{colorize, print_color};
-use fs_extra::file::{move_file, CopyOptions};
+use fs_extra::{
+    dir::{move_dir, CopyOptions},
+    file::{move_file, CopyOptions as FileCopyOpts},
+};
 use glob::{glob, GlobError};
-use log::{error, info};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -174,7 +177,18 @@ impl Trash {
                 }
 
                 // Todo: Better error handling when move doesn't work
-                move_file(&old_path, &new_path, &CopyOptions::default())?;
+
+                if old_path.is_file() {
+                    move_file(&old_path, &new_path, &FileCopyOpts::default())?;
+                } else if old_path.is_dir() {
+                    move_dir(&old_path, &new_path, &CopyOptions::default())?;
+                } else {
+                    warn!(
+                        "Path {:?} is not a file or a directory. Skipping...",
+                        &old_path
+                    );
+                    continue;
+                }
 
                 let pair = HistoryPair(old_path, new_path);
 
