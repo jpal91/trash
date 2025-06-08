@@ -1,6 +1,6 @@
 [package]
 name = "trash"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -10,10 +10,12 @@ clap = { version = "4.5.0", features = ["derive"] }
 colorize-macros = "0.6.3"
 dirs = "5.0.1"
 env_logger = "0.11.2"
+fs_extra = "1.3.0"
 glob = "0.3.1"
 log = "0.4.20"
 serde = { version = "1.0.196", features = ["derive"] }
 serde_json = "1.0.113"
+thiserror = "2.0.12"
 
 [dev-dependencies]
 tempfile = "3.10.0"

@@ -1,11 +1,15 @@
-use std::fs::{rename, File};
-use std::io::{BufReader, Write};
-use std::path::PathBuf;
-use std::{env, fs};
+use std::{
+    env,
+    fs::{self, File},
+    io::{BufReader, Write},
+    path::PathBuf,
+    string::ToString,
+};
 
 use clap::Parser;
 use colorize::{colorize, print_color};
-use glob::glob;
+use fs_extra::file::{move_file, CopyOptions};
+use glob::{glob, GlobError};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 
@@ -47,37 +51,32 @@ pub struct Args {
     pub name: Option<Vec<String>>,
 }
 
-#[derive(Debug)]
-pub struct TrashError(String);
+// #[derive(Debug)]
+// pub struct TrashError(String);
+
+#[derive(thiserror::Error, Debug)]
+pub enum TrashError {
+    #[error("{}", self.fmt_err())]
+    General(String),
+    #[error("{}", self.fmt_err())]
+    Io(#[from] std::io::Error),
+    #[error("{}", self.fmt_err())]
+    Serde(#[from] serde_json::error::Error),
+    #[error("{}", self.fmt_err())]
+    Glob(#[from] GlobError),
+    #[error("{}", self.fmt_err())]
+    FSExtra(#[from] fs_extra::error::Error),
+}
+
 type TrashResult<T> = Result<T, TrashError>;
 
 impl TrashError {
     fn new(err: &str) -> Self {
-        Self(err.to_string())
+        Self::General(err.to_string())
     }
-}
 
-impl From<std::io::Error> for TrashError {
-    fn from(value: std::io::Error) -> Self {
-        Self(value.to_string())
-    }
-}
-
-impl From<&str> for TrashError {
-    fn from(value: &str) -> Self {
-        Self(value.to_string())
-    }
-}
-
-impl From<serde_json::Error> for TrashError {
-    fn from(value: serde_json::Error) -> Self {
-        Self(value.to_string())
-    }
-}
-
-impl std::fmt::Display for TrashError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", colorize!(Frb->"trash error:", b->self.0.as_str()))
+    fn fmt_err(&self) -> String {
+        colorize!(Frb->"trash error:", b->self.to_string())
     }
 }
 
@@ -129,7 +128,7 @@ impl Trash {
                 continue;
             }
 
-            if let Err(e) = rename(&new, &old) {
+            if let Err(e) = fs::rename(&new, &old) {
                 unresolved.push(HistoryPair(old, new));
                 error!("{}", colorize!(Frb->"trash error:", e))
             }
@@ -175,7 +174,7 @@ impl Trash {
                 }
 
                 // Todo: Better error handling when move doesn't work
-                rename(&old_path, &new_path)?;
+                move_file(&old_path, &new_path, &CopyOptions::default())?;
 
                 let pair = HistoryPair(old_path, new_path);
 
