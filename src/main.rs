@@ -1,3 +1,4 @@
+mod move_files;
 mod trash;
 
 use std::{io::Write, process::ExitCode};

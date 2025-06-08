@@ -22,6 +22,8 @@ use glob::{glob, GlobError};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 
+use super::move_files::rename;
+
 #[derive(Serialize, Deserialize, Debug)]
 struct HistoryPair(PathBuf, PathBuf);
 
@@ -110,7 +112,7 @@ impl Trash {
     }
 
     pub fn default() -> TrashResult<Self> {
-        let (hist_path, trash_path) = resolve_paths_new()?;
+        let (hist_path, trash_path) = resolve_paths()?;
         let file = File::open(&hist_path)?;
         let reader = BufReader::new(file);
 
@@ -166,46 +168,8 @@ impl Trash {
                     Ok(ent) => ent.canonicalize()?,
                     _ => continue,
                 };
-                let mut new_path = trash_dir.join(old_path.file_name().unwrap());
-                // let mut new_path =
-                //     PathBuf::from_iter([trash_dir.as_os_str(), old_path.file_name().unwrap()]);
 
-                info!(
-                    "{}",
-                    colorize!(b->"Moving", Fgb->&old_path, b->"to", Fgb->&new_path)
-                );
-
-                if self.explain {
-                    continue;
-                }
-
-                if new_path.exists() {
-                    // new_path = new_dir_name(new_path);
-                    new_item_name(&mut new_path);
-                    info!(
-                        "{}",
-                        colorize!(b->"Directory path already exists. Switching to", Fgb->&new_path)
-                    );
-                }
-
-                // // Todo: Better error handling when move doesn't work
-                fs::rename(&old_path, &new_path)?;
-
-                // if old_path.is_file() {
-                //     move_file(&old_path, &new_path, FileMoveOptions::default())?;
-                // } else if old_path.is_dir() {
-                //     move_directory(&old_path, &new_path, DirectoryMoveOptions::default())?;
-                // } else {
-                //     warn!(
-                //         "Path {:?} is not a file or a directory. Skipping...",
-                //         &old_path
-                //     );
-                //     continue;
-                // }
-
-                let pair = HistoryPair(old_path, new_path);
-                hist_item.push(pair);
-                // move_targets(old_path, trash_dir.clone(), &mut hist_item, self.explain)?;
+                move_targets(old_path, trash_dir.clone(), &mut hist_item, self.explain)?;
             }
         }
 
@@ -235,43 +199,20 @@ impl Trash {
     }
 }
 
-pub fn resolve_paths() -> TrashResult<(PathBuf, PathBuf)> {
-    let mut hist_path =
-        PathBuf::from_iter([dirs::home_dir().unwrap(), PathBuf::from(".config/trash/")]);
-
-    if !hist_path.try_exists().unwrap() {
-        fs::create_dir_all(&hist_path)?;
-    }
-
-    hist_path.push("trash-history.json");
-
-    if !hist_path.try_exists().unwrap() {
-        let mut file = File::create(&hist_path)?;
-        file.write_all(b"[]").unwrap();
-    }
-
-    let mut trash_dir = env::temp_dir();
-    trash_dir.push("trash/");
-
-    // Most likely meaning the computer has restart and /tmp has been cleared
-    // New cfg is necessary along with the creation of the directory
-    if !trash_dir.try_exists()? {
-        fs::create_dir(&trash_dir)?;
-        let mut file = File::create(&hist_path)?;
-        file.write_all(b"[]")?;
-    }
-
-    Ok((hist_path, trash_dir))
-}
-
-fn resolve_paths_new() -> TrashResult<(PathBuf, PathBuf)> {
-    let hist_path = env::temp_dir().join("trash-rs-history.json");
-    let trash_dir = dirs::cache_dir()
+fn resolve_paths() -> TrashResult<(PathBuf, PathBuf)> {
+    let trash_dir = env::temp_dir().join("trash");
+    let hist_path = dirs::data_local_dir()
         .ok_or(TrashError::General("Could not get local data dir".into()))?
-        .join("trash-rs-dump");
+        .join("trash-rs")
+        .join("trash-history.json");
+
+    debug!(
+        "Trash Directory - {:?}, History Path - {:?}",
+        &trash_dir, &hist_path
+    );
 
     if !hist_path.try_exists()? {
-        _ = fs::remove_dir_all(&trash_dir);
+        fs::create_dir_all(hist_path.parent().unwrap())?;
         fs::write(&hist_path, b"[]")?;
     }
 
@@ -280,20 +221,6 @@ fn resolve_paths_new() -> TrashResult<(PathBuf, PathBuf)> {
     }
 
     Ok((hist_path, trash_dir))
-}
-
-fn new_dir_name(mut dir: PathBuf) -> PathBuf {
-    let mut count = 1;
-
-    loop {
-        dir.set_extension(count.to_string());
-
-        if !dir.exists() {
-            return dir;
-        }
-
-        count += 1;
-    }
 }
 
 fn new_item_name(item: &mut PathBuf) {
@@ -310,28 +237,6 @@ fn new_item_name(item: &mut PathBuf) {
     }
 }
 
-// fn move_target(target_path: PathBuf, base_dir: PathBuf) -> TrashResult<()> {
-//     if target_path.is_file() {
-//         let mut new_path =
-//             PathBuf::from_iter([base_dir.as_os_str(), target_path.file_name().unwrap()]);
-
-//         if new_path.exists() {
-//             new_path = new_dir_name(new_path);
-//         }
-
-//         move_file(&target_path, &new_path, FileMoveOptions::default())?;
-//     } else if target_path.is_dir() {
-//         move_dir(target_path, base_dir)?;
-//     } else {
-//         warn!(
-//             "Path {:?} is not a file or a directory. Skipping...",
-//             &old_path
-//         );
-//     }
-
-//     Ok(())
-// }
-
 fn move_targets(
     path: PathBuf,
     base_dir: PathBuf,
@@ -343,44 +248,48 @@ fn move_targets(
     let mut queue: VecDeque<(PathBuf, PathBuf)> = VecDeque::new();
     queue.push_back((path, base_dir));
 
+    let mut delete_dirs: Vec<PathBuf> = vec![];
+
     while let Some((item, base)) = queue.pop_front() {
-        debug!("Item - {:?}, Base - {:?}", &item, &base);
+        debug!(
+            "Item - {:?}, Base - {:?}, IsDir - {}",
+            &item,
+            &base,
+            item.is_dir()
+        );
+        let mut new_path = base.join(item.file_name().unwrap());
 
         if item.is_dir() {
-            let mut new_path = PathBuf::from_iter([base.as_os_str(), item.file_name().unwrap()]);
-
-            if !base.exists() {
-                debug!("Creating new temp dir {:?}", &base);
-
-                if !skip_move {
-                    fs::create_dir_all(&base)?;
-                }
-            }
-
             if new_path.exists() {
-                new_path = new_dir_name(new_path);
+                new_item_name(&mut new_path);
                 info!(
                     "{}",
                     colorize!(b->"Directory path already exists. Switching to", Fgb->&new_path)
                 );
+            } else {
+                debug!("Creating new dir {:?}", &new_path);
+            }
+
+            if !skip_move {
+                fs::create_dir_all(&new_path)?;
             }
 
             let dir_items = fs::read_dir(&item)?
                 .filter_map(|ditem| ditem.ok().map(|d| (d.path(), new_path.clone())));
             queue.extend(dir_items);
-        } else if item.is_file() {
-            let mut new_path = PathBuf::from_iter([base.as_os_str(), item.file_name().unwrap()]);
 
+            delete_dirs.push(item);
+        } else if item.is_file() {
             info!(
                 "{}",
                 colorize!(b->"Moving", Fgb->&item, b->"to", Fgb->&new_path)
             );
 
             if new_path.exists() {
-                new_path = new_dir_name(new_path);
+                new_item_name(&mut new_path);
                 info!(
                     "{}",
-                    colorize!(b->"Directory path already exists. Switching to", Fgb->&new_path)
+                    colorize!(b->"File path already exists. Switching to", Fgb->&new_path)
                 );
             }
 
@@ -388,17 +297,20 @@ fn move_targets(
                 continue;
             }
 
-            // move_file(&item, &new_path, FileMoveOptions::default())?;
-
-            fs::copy(&item, &new_path)?;
-
-            fs::remove_file(&item)?;
+            rename(&item, &new_path)?;
 
             let pair = HistoryPair(item, new_path);
             hist_items.push(pair);
         } else {
             warn!("Path {:?} is not a file or a directory. Skipping...", &item);
         }
+    }
+
+    for dir in delete_dirs {
+        if !dir.exists() {
+            continue;
+        }
+        _ = fs::remove_dir_all(&dir);
     }
     Ok(())
 }
